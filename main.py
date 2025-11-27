@@ -1,5 +1,7 @@
 import cv2
 from tkinter import Tk, filedialog
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
 from deepface import DeepFace
 import ollama
 
@@ -55,7 +57,9 @@ def analyze_emotions(image, faces):
             emotions = result.get('emotion', {})
             dominant = result.get('dominant_emotion', 'Nem sikerült kiolvasni.')
             age = result.get('age', 'Nem sikerült kiolvasni.')
-            gender = result.get('gender', 'Nem sikerült kiolvasni.')
+            gender_data = result.get('gender', {})
+            # Extract dominant gender from dictionary
+            gender = max(gender_data, key=gender_data.get) if isinstance(gender_data, dict) else str(gender_data)
 
         except Exception as e:
             emotions = {}
@@ -93,6 +97,45 @@ def analyze_emotions(image, faces):
     return img_copy, emotions_data
 
 
+#Emoji generálás ollamaval
+def generate_emoji(emotions: dict, dominant: str):
+    try:
+        response = ollama.chat(
+            model="gemma3:1b",
+            messages=[
+                {"role": "system", "content": "Válaszolj CSAK egyetlen emoji karakterrel. Semmi más."},
+                {"role": "user", "content": f"Domináns érzelem: {dominant}. Milyen emoji illik hozzá?"}
+            ],
+            options={"temperature": 0.3}
+        )
+        emoji = response['message']['content'].strip()
+        return emoji if emoji else "😐"
+    except Exception as e:
+        print(f"Emoji hiba: {e}")
+        return "❓"
+    
+def create_emoji_image(emoji):
+    img = Image.new("RGB", (400, 400), "white")
+    draw = ImageDraw.Draw(img)
+
+    try:
+        font = ImageFont.truetype("seguiemj.ttf", 200)  # Windows emoji font
+    except:
+        font = ImageFont.load_default()
+
+    bbox = draw.textbbox((0, 0), emoji, font=font)
+    w = bbox[2] - bbox[0]
+    h = bbox[3] - bbox[1]
+
+    x = (400 - w) / 2
+    y = (400 - h) / 2
+
+    draw.text((x, y), emoji, font=font, fill="black")
+
+    return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
+
+
 #Leírás ollamaval 
 def generate_description(emotions: dict, dominant: str, age: str, gender: str):
     try:
@@ -112,7 +155,6 @@ def generate_description(emotions: dict, dominant: str, age: str, gender: str):
     except Exception as e:
         description = f"Domináns érzelem: {dominant}, eloszlás: {emotions}, Nem: {gender}, Kor: {age}\n(Hiba: {e})"
 
-    # console
     print("\n--- Leírás ---")
     print(description)
     print("--------------------\n")
@@ -135,30 +177,58 @@ def pipeline():
     step1 = draw_faces(image, faces)
     step2, emotions_data = analyze_emotions(image, faces)
 
-    #leírások generálása és konzolra írása
+    emoji_images = []
     for i, emo in enumerate(emotions_data, start=1):
-        print(f"\nArcon található érzelmek:{i}:")
-        generate_description(emo["emotions"], emo["dominant"], emo["age"], emo["gender"])
+        print(f"\n========== Arc {i} ==========")
 
+        emoji = generate_emoji(emo["emotions"], emo["dominant"])
+        emoji_images.append(create_emoji_image(emoji))
+
+        print(f"Emoji: {emoji}")
+        print(f"Domináns érzelem: {emo['dominant']}")
+        print(f"Nem: {emo['gender']}")
+        print(f"Kor: {emo['age']}")
+
+        generate_description(
+            emo["emotions"],
+            emo["dominant"],
+            emo["age"],
+            emo["gender"]
+        )
 
     steps = [step0, step1, step2]
     titles = ["Eredeti kép", "Arc detektálás", "Érzelem felismerés"]
 
     step = 0
+    emoji_index = 0
+
     cv2.namedWindow("Pipeline", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Emoji", cv2.WINDOW_NORMAL)
+
     while True:
         cv2.setWindowTitle("Pipeline", titles[step])
         cv2.imshow("Pipeline", steps[step])
+
+        if emoji_images:
+            cv2.imshow("Emoji", emoji_images[emoji_index])
+
         key = cv2.waitKey(0)
 
-        if key == ord('n'):
+        if key == ord('n'):          
             step = (step + 1) % len(steps)
-        elif key == ord('p'):
+
+        elif key == ord('p'):        
             step = (step - 1) % len(steps)
-        elif key == 27:
+
+        elif key == ord('e'):       
+            emoji_index = (emoji_index + 1) % len(emoji_images)
+
+        elif key == ord('q'):        
+            emoji_index = (emoji_index - 1) % len(emoji_images)
+
+        elif key == 27:            
             break
 
     cv2.destroyAllWindows()
-
 if __name__ == "__main__":
     pipeline()
